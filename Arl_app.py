@@ -8,11 +8,16 @@ from fuzzywuzzy import process
 import re
 import json
 import calendar
+from datetime import datetime
 import os
-import numpy
+import matplotlib.pyplot as plt
+from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image
+
 #endregion
 
 #region procesamiento xlsx
+
 def process_file(file_path, file_path2, output_folder, keywords, threshold):
     try:
         # Ruta de salida
@@ -29,6 +34,46 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         df = read_excel_file(file_path)
         df2 = read_excel_file(file_path2)
 
+        # Estadísticas iniciales
+        total_rows = len(df)
+        initial_rows = total_rows
+
+#region data frame de nomina
+
+        fecha_1_enero = datetime(datetime.now().year, 1, 1)
+
+        # Función para aplicar a cada fila del DataFrame
+        def asignar_fecha1(fila):
+            try:
+                # Verificar si FECHA INGRESO está en un formato correcto (fecha)
+                if pd.isnull(fila['FECHA INGRESO']):
+                    return None  # O puedes retornar una fecha predeterminada si lo prefieres
+                if fila['FECHA INGRESO'] < fecha_1_enero:
+                    return fecha_1_enero
+                else:
+                    return fila['FECHA INGRESO']
+            except Exception as e:
+                # Captura cualquier error y lo imprime, también puede devolver un valor predeterminado
+                print(f"Error al procesar la fila: {e}")
+                return None  # O puedes elegir una fecha predeterminada
+
+        # Crear la nueva columna 'Fecha1'
+        df2['Fecha1'] = df2.apply(asignar_fecha1, axis=1)
+
+
+#endregion
+
+
+
+
+
+        # Crear una columna concatenada de 'IDENTIFICACION' y 'REAL INICIO'
+        # Eliminar duplicados basados en la columna concatenada
+        df['concat'] = df['IDENTIFICACION'].astype(str) + df['REAL INICIO'].astype(str)
+        duplicates_found = len(df) - len(df.drop_duplicates(subset=['concat'], keep='first'))
+        df.drop_duplicates(subset=['concat'], inplace=True)
+        df.drop(columns=['concat'], inplace=True)
+
         # Función para asignar categorías según palabras clave
         def categorize_reason(reason):
             if not reason or pd.isna(reason):
@@ -43,31 +88,19 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
                 if result and result[1] > threshold:
                     return category
             return "delete"
-
-        # Estadísticas iniciales
-        total_rows = len(df)
-        initial_rows = total_rows
-
-        # Primera limpieza: Asignar categorías basadas en palabras clave
+        
+        #Asignar categorías basadas en palabras clave y eliminar = delete
         df['Categoria'] = df['MOTIVO'].astype(str).apply(categorize_reason)
         filtered_rows = df[df['Categoria'] != 'delete']
-        
-        # Crear una columna concatenada de 'IDENTIFICACION' y 'REAL INICIO'
-        df['concat'] = df['IDENTIFICACION'].astype(str) + df['REAL INICIO'].astype(str)
-
-        # Eliminar duplicados basados en la columna concatenada
-        duplicates_found = len(df) - len(df.drop_duplicates(subset=['concat'], keep='first'))
-        df.drop_duplicates(subset=['concat'], inplace=True)
-
         # Eliminar las filas donde la categoría sea "delete"
         df = df[df['Categoria'] != 'delete']
 
-        # Rutina para tratamiento de rango de fechas fechas 
+        # Rutina para tratamiento de rango de fechas
         # Verificar y convertir las columnas de fechas
         df['REAL INICIO'] = pd.to_datetime(df['REAL INICIO'], errors='coerce')
         df['REAL FINAL'] = pd.to_datetime(df['REAL FINAL'], errors='coerce')
 
-                # Verificar si hay fechas inválidas
+        # Verificar si hay fechas inválidas
         invalid_start_dates = df['REAL INICIO'].isna().sum()
         invalid_end_dates = df['REAL FINAL'].isna().sum()
 
@@ -76,10 +109,8 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
             label_status.config(
                 text=f"Fechas inválidas encontradas : {invalid_start_dates + invalid_end_dates}",fg="red")
 
-
         # Eliminar filas con fechas inválidas
         df.dropna(subset=['REAL INICIO', 'REAL FINAL'], inplace=True)
-
         # Crear columnas para cada mes del año con los nombres reales
         meses = [calendar.month_name[i] for i in range(1, 13)]
         for mes in meses:
@@ -89,7 +120,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         for index, row in df.iterrows():
             start_date = row['REAL INICIO']
             end_date = row['REAL FINAL']
-
             if pd.notna(start_date) and pd.notna(end_date) and start_date <= end_date:
                 # Iterar mes por mes dentro del rango
                 current_date = start_date
@@ -100,9 +130,8 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
                     df.at[index, mes] += 1
                     # Avanzar al siguiente día
                     current_date += pd.Timedelta(days=1)
-
         # Eliminar la columna de concatenación después de procesar
-        df.drop(columns=['concat'], inplace=True)
+        
 
         #Calcula dias transcurridos 
         df['DIAS_TRANSCURRIDOS'] = (df['REAL FINAL'] - df['REAL INICIO']).dt.days + 1
@@ -121,12 +150,12 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
             root.update_idletasks()
             return None, None
 
-
         # Iterar sobre la columna 'MOTIVO' para asignar 'CODE' y 'Diagnostico' al DataFrame
         df[['CODE', 'Diagnostico']] = [find_code_and_diagnosis_with_progress(motivo, index) for index, motivo in enumerate(df['MOTIVO'])]
 
         # Lista de posibles sedes
         sedes = ["ADMINISTRATIVA", "TOCANCIPÁ", "ITAGUI", "MONTEVIDEO", "SIBERIA", "AUTOSUR-BOSA"]
+        cat_add = ['N° DE ENFERMEDADES LABORALES (E.L.)', 'N° DÍAS INCAPACIDAD POR ENFERMEDAD LABORAL']
 
         # Función para asignar la sede en base a coincidencias aproximadas y reglas específicas
         def asignar_sede(nomina):
@@ -147,19 +176,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         df['REAL FINAL'] = pd.to_datetime(df['REAL FINAL'], errors='coerce').dt.strftime('%d/%m/%Y')
         df['Salario_base'] = df['SUELDO']/30
 
-        # Crear la nueva columna 'DiasAseg_AT' según la condición especificada
-        #df['DiasAseg_AT'] = df.apply(
-        #    lambda row: row['DIAS_TRANSCURRIDOS'] - 1 if row['Categoria'] == 'A.T.' else 0, axis=1
-        #)
-
-        # Crear la nueva columna 'DiasAseg_AC' según la condición especificada
-        #df['DiasAseg_AC'] = df.apply(
-        #    lambda row: row['DIAS_TRANSCURRIDOS'] if row['Categoria'] == 'A.C.' and row['DIAS_TRANSCURRIDOS'] < 3
-        #    else (3 if row['Categoria'] == 'A.C.' else 0), axis=1
-        #)
-
-        #df['CostAseg_AT'] = df['DiasAseg_AT']*df['Salario_base']
-        #df['CostAseg_AC'] = df['DiasAseg_AC']*df['Salario_base']*0.66
 
         df['CostBrut_AT'] = df['DIAS_TRANSCURRIDOS']*df['Salario_base']
         df['CostBrut_AC'] = df['DIAS_TRANSCURRIDOS']*df['Salario_base']*0.66
@@ -226,13 +242,10 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
 
         # Asegurarse de que todas las combinaciones estén presentes en la pivot table
         pivot_table = base_df.join(pivot_table, how="left").fillna(0).reset_index()
-
         # Convertir los valores de la pivot table a enteros
         pivot_table.iloc[:, 2:] = pivot_table.iloc[:, 2:].astype(int)
-
         #Reordenar meses
         pivot_table =pivot_table[column_order2]
-        
         #Generar dataframe para tabla dinamica #2 x agregacion de conteo
         df_aux = df[column_order3]
         df_aux = df_aux[~df_aux['Categoria'].isin(categorias_a_eliminar)]
@@ -268,8 +281,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
             "Registros finales": final_rows
         }
         
-
-
         # Crear una nueva columna basada en condiciones TABLA DIAS TOTALES
         def categorize_s(value):
             if value == "A.C.":
@@ -280,7 +291,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
                 return value  # Si no coincide, se deja igual
 
         pivot_table["Categoria"] = pivot_table["Categoria"].apply(categorize_s)
-
         # Crear una nueva columna basada en condiciones TABLA CANTIDAD INCAPACIDADES
         def categorize_n(value):
             if value == "A.C.":
@@ -292,13 +302,31 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
 
         pivot_table2["Categoria"] = pivot_table2["Categoria"].apply(categorize_n)
 
+        # Crear un DataFrame vacío con los índices y las columnas
+        data = []
+
+        # Repetir las sedes para las dos categorías y agregar ceros a las columnas de meses
+        for sede in sedes:
+            for categoria in cat_add:
+                row = [sede, categoria] + [0] * len(meses)  # Agregar ceros por cada mes
+                data.append(row)
+
+        # Crear el DataFrame
+        df_add = pd.DataFrame(data, columns=['SEDE', 'Categoria'] + meses)
+        df_report = pd.concat([pivot_table, pivot_table2, df_add], ignore_index=True)
+        df_report = df_report.sort_values(by=['SEDE', 'Categoria'])
+        
+        # Agrupar por la columna 'Categoria' y sumar las columnas de meses
+        df_sumado = df_report.groupby('Categoria').sum(numeric_only=True).reset_index()
+        df_report2 = pd.concat([df_report, df_sumado], ignore_index=True)
+
         with pd.ExcelWriter(output_path) as writer:
             df_f.to_excel(writer, sheet_name='Datos', index=False)
-            pivot_table.to_excel(writer, sheet_name='Pivot', index=False)
-            pivot_table2.to_excel(writer, sheet_name='Pivot2', index=False)
+            df2.to_excel(writer, sheet_name='Horas', index=False)
+            df_report2.to_excel(writer, sheet_name='Report', index=False)
 
+     
 
-        print(f"Archivo limpio generado: {output_path}")
         return True, stats
     except Exception as e:
         print(e)
@@ -316,7 +344,7 @@ def load_json():
     except Exception as e:
         label_json_display.config(text=f"Error al cargar el archivo JSON: {str(e)}", fg="red")
 
-
+#Funciones para seleccionar y cargar los archivos a la fila de procesos
 def select_file(label, global_var_name=None, load_json_on_select=False):
     #Función genérica para seleccionar un archivo Excel y actualizar la etiqueta correspondiente.
     #Args:
@@ -333,7 +361,6 @@ def select_file(label, global_var_name=None, load_json_on_select=False):
     else:
         label.config(text="SIN ARCHIVO", fg="red")
 
-
 def select_file_ausentismos():
     #Función específica para seleccionar el archivo de ausentismos.
     #Llama a la función genérica y carga el JSON automáticamente después.
@@ -348,16 +375,52 @@ def select_output_folder():
     global output_folder_path
     output_folder_path = filedialog.askdirectory()
     if output_folder_path:
-        label_output_folder.config(text=output_folder_path, fg="green", cursor="hand2", font=("Helvetica", 10, "underline"))
+        label_output_folder.config(text=output_folder_path, fg="blue", cursor="hand2", font=("Helvetica", 10))
     else:
         label_output_folder.config(text="DETERMINAR RUTA DE SALIDA", fg="red")
 
+# Abre la carpeta de destino en el explorador de archivos
 def open_folder(event):
-    # Abre la carpeta de destino en el explorador de archivos
     folder_path = label_output_folder.cget("text")  # Obtener la ruta del texto del label
     if os.path.exists(folder_path):
-        os.startfile(folder_path)  # Para Windows
+        os.startfile(folder_path) 
 
+
+def load_combine_and_save_files():
+    #Selecciona múltiples archivos Excel, los carga, los combina y permite guardar el resultado.
+    global label_status
+    # Seleccionar múltiples archivos
+    file_paths = filedialog.askopenfilenames(filetypes=[("Excel files", "*.xlsx;*.xls")])
+
+    if file_paths:
+        try:
+            # Mostrar estado inicial en la etiqueta
+            label_status.config(text=f"{len(file_paths)} archivo(s) seleccionado(s). Procesando...", fg="black")
+            label_status.update()  # Actualizar la interfaz
+
+            # Cargar y combinar archivos
+            dataframes = [pd.read_excel(path) for path in file_paths]
+            combined_df = pd.concat(dataframes, ignore_index=True)
+
+            # Abrir diálogo para guardar el archivo combinado
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx")]
+            )
+
+            if file_path:
+                # Guardar el DataFrame combinado
+                combined_df.to_excel(file_path, index=False)
+                label_status.config(text=f"Archivo combinado guardado exitosamente en: {file_path}", fg="green")
+            else:
+                label_status.config(text="Guardado cancelado.", fg="orange")
+        except Exception as e:
+            # Mostrar error si algo falla
+            label_status.config(text=f"Error al procesar archivos: {e}", fg="red")
+    else:
+        label_status.config(text="SIN ARCHIVOS SELECCIONADOS", fg="red")
+
+#Funcionalidad del Boton que da inicio al analisi
 def clean_file():
     if not selected_file_path:
         label_file_path.config(text="Debe seleccionar un archivo ausentismos", fg="red")
@@ -389,11 +452,20 @@ def clean_file():
     else:
         label_status.config(text=f"Error: {stats.get('error', 'Desconocido')}", fg="red")
 
+def reset_labels():
+    label_file_path.config(text="En espera de Archivo de ausentismos", fg="blue")
+    label_file_path2.config(text="En espera de archivo de personal", fg="blue")
+    label_output_folder.config(text="En espera seleccionar Ruta de Salida", fg="blue", underline=0)
+    label_status.config(text="", fg="black")
+
 #endregion
 
 #region tkinter
 
 # Crear la ventana principal
+
+
+
 root = tk.Tk()
 root.title("Procesador de Archivos Excel Ausentismos")
 root.geometry("900x800")
@@ -416,12 +488,16 @@ filex_path = os.path.join(current_dir, "img", "ausentismos.png")
 filey_path = os.path.join(current_dir, "img", "personal.png")
 folderx_path = os.path.join(current_dir, "img", "folder.png")
 datax_path = os.path.join(current_dir, "img", "data.png")
+multi_path = os.path.join(current_dir, "img", "multi.png")
+escoba_path =os.path.join(current_dir, 'img', "escoba.png")
 
 # Cargar las imágenes con rutas absolutas
 filex = tk.PhotoImage(file=filex_path)
 filey = tk.PhotoImage(file=filey_path)
 folderx = tk.PhotoImage(file=folderx_path)
 datax = tk.PhotoImage(file=datax_path)
+multi = tk.PhotoImage(file=multi_path)
+escoba = tk.PhotoImage(file=escoba_path)
 
 # Configurar pesos en el root para adaptabilidad
 root.grid_rowconfigure(0, weight=1)  # Frame botones
@@ -430,19 +506,17 @@ root.grid_rowconfigure(2, weight=1)  # Frame inferior
 root.grid_columnconfigure(0, weight=1)
 
 # Crear Frames para organizar los widgets
-frame_buttons = Frame(root)
-frame_buttons.grid(row=0, column=0, pady=10, padx=20, sticky="nsew")
-
-frame_labels = Frame(root, relief='groove', bd=2)
-frame_labels.grid(row=1, column=0, pady=10, padx=20, sticky="nsew")
-
-frame_bottom = Frame(root, relief='groove', bd=1)
-frame_bottom.grid(row=2, column=0, pady=10, padx=20, sticky="nsew")
+frame_buttons = tk.Frame(root)
+frame_buttons.grid(row=0, column=0, pady=5, padx=20, sticky="nsew")
+frame_labels = tk.Frame(root, relief='groove', bd=2)
+frame_labels.grid(row=1, column=0, pady=5, padx=20, sticky="nsew")
+frame_bottom = tk.Frame(root, relief='groove', bd=1)
+frame_bottom.grid(row=2, column=0, pady=5, padx=20, sticky="nsew")
 
 # Configurar pesos en frame_buttons
 frame_buttons.grid_rowconfigure(0, weight=1)  # Botones
 frame_buttons.grid_rowconfigure(1, weight=1)  # Barra de progreso
-for col in range(4):  # Una columna para cada botón
+for col in range(5):  # Una columna para cada botón
     frame_buttons.grid_columnconfigure(col, weight=1)
 
 # Configurar pesos en frame_labels
@@ -456,43 +530,46 @@ for row in range(4):  # Widgets de la parte inferior
 frame_bottom.grid_columnconfigure(0, weight=1)
 
 # Frame 1: Botones en disposición horizontal con grid
-btn_select_file = Button(frame_buttons, width=80, height=80, text="Ausentismos", image=filex, compound='bottom', command=select_file_ausentismos)
+btn_select_file = tk.Button(frame_buttons, width=80, height=80, text="Ausentismos", image=filex, compound='bottom', command=select_file_ausentismos)
 btn_select_file.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-btn_select_file2 = Button(frame_buttons, width=80, height=80, text="Personal", image=filey, compound='bottom', command=select_file_personal)
+btn_select_file2 = tk.Button(frame_buttons, width=80, height=80, text="Personal", image=filey, compound='bottom', command=select_file_personal)
 btn_select_file2.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
-btn_select_output = Button(frame_buttons, width=80, height=80, text="Carpeta Salida", image=folderx, compound='bottom', command=select_output_folder)
+btn_select_output = tk.Button(frame_buttons, width=80, height=80, text="Carpeta Salida", image=folderx, compound='bottom', command=select_output_folder)
 btn_select_output.grid(row=0, column=2, padx=10, pady=10, sticky="nsew")
 
-btn_clean_file = Button(frame_buttons, width=80, height=80, text="Procesar", image=datax, compound='bottom', command=clean_file)
-btn_clean_file.grid(row=0, column=3, padx=10, pady=10, sticky="nsew")
+btn_multi = tk.Button(frame_buttons, width=80, height=80, text="Agrupar Archivos", image=multi, compound='bottom', command=load_combine_and_save_files)
+btn_multi.grid(row=0, column=3, padx=10, pady=10, sticky="nsew")
+
+btn_clean_file = tk.Button(frame_buttons, width=80, height=80, text="Procesar", image=datax, compound='bottom', command=clean_file)
+btn_clean_file.grid(row=0, column=4, padx=10, pady=10, sticky="nsew")
 
 progress_bar = Progressbar(frame_buttons, orient="horizontal", length=400, mode="determinate")
-progress_bar.grid(row=1, column=0, columnspan=4, pady=10, sticky="ew")
+progress_bar.grid(row=1, column=0, columnspan=5, pady=10, sticky="ew")
+
 
 # Frame 2: Labels
-label_file_path = Label(frame_labels, text="SIN ARCHIVO DE AUSENTISMOS", fg="blue")
-label_file_path.grid(row=0, column=0, pady=2, sticky="nsew")
 
-label_file_path2 = Label(frame_labels, text="SIN ARCHIVO DE PERSONAL", fg="blue")
-label_file_path2.grid(row=1, column=0, pady=2, sticky="nsew")
-
-label_output_folder = Label(frame_labels, text="DETERMINAR RUTA DE SALIDA", fg="blue")
-label_output_folder.grid(row=2, column=0, pady=2, sticky="nsew")
+btn_erase = tk.Button(frame_labels, width=80, height=80, text="Reiniciar rutas", image=escoba, compound='bottom', command=reset_labels)
+btn_erase.grid(row=0, column=0, padx=10, pady=10, sticky="n")
+label_file_path = tk.Label(frame_labels, text="En espera de Archivo de ausentismos", fg="blue")
+label_file_path.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+label_file_path2 = tk.Label(frame_labels, text="En espera de archivo de personal", fg="blue")
+label_file_path2.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+label_output_folder = tk.Label(frame_labels, text="En espera seleccionar Ruta de Salida", fg="blue", cursor="hand2")
+label_output_folder.grid(row=3, column=0, padx=10, pady=10, sticky="nsew")
 label_output_folder.bind("<Button-1>", open_folder)
+label_status = tk.Label(frame_labels, text="", fg="black")
+label_status.grid(row=4, column=0, padx=10, pady=10, sticky="nsew")
+# Cambiar colores en los widgets
 
-label_status = Label(frame_labels, text="", fg="black")
-label_status.grid(row=3, column=0, pady=2, sticky="nsew")
 
 # Frame 3: Etiquetas y otros widgets en la parte inferior
-label_stats = Label(frame_bottom, text="", justify="left", fg="blue")
+label_stats = tk.Label(frame_bottom, text="", justify="left", fg="blue")
 label_stats.grid(row=0, column=0, pady=5, sticky="nsew")
-
-label_json_display = Label(frame_bottom, text="Diccionario ICD_10", justify="left", fg="blue")
+label_json_display = tk.Label(frame_bottom, text="Diccionario ICD_10", justify="left", fg="blue")
 label_json_display.grid(row=1, column=0, pady=5, sticky="nsew")
 
 # Iniciar el loop principal
 root.mainloop()
-
-#endregion
