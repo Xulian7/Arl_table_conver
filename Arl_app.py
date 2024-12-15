@@ -38,34 +38,72 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         total_rows = len(df)
         initial_rows = total_rows
 
+
+
 #region data frame de nomina
 
-        fecha_1_enero = datetime(datetime.now().year, 1, 1)
-
-        # Función para aplicar a cada fila del DataFrame
-        def asignar_fecha1(fila):
+        # Función genérica para asignar fechas según condiciones
+        def asignar_fecha(fila, columna_fecha, referencia, limite_superior=True):
+        
             try:
-                # Verificar si FECHA INGRESO está en un formato correcto (fecha)
-                if pd.isnull(fila['FECHA INGRESO']):
-                    return None  # O puedes retornar una fecha predeterminada si lo prefieres
-                if fila['FECHA INGRESO'] < fecha_1_enero:
-                    return fecha_1_enero
+                # Verificar si la columna tiene un valor nulo
+                if pd.isnull(fila[columna_fecha]):
+                    return referencia
+                
+                # Asignar fecha según el límite especificado
+                if limite_superior:
+                    return max(fila[columna_fecha], referencia)
                 else:
-                    return fila['FECHA INGRESO']
+                    return min(fila[columna_fecha], referencia)
             except Exception as e:
-                # Captura cualquier error y lo imprime, también puede devolver un valor predeterminado
-                print(f"Error al procesar la fila: {e}")
-                return None  # O puedes elegir una fecha predeterminada
+                print(f"Error al procesar la fila en {columna_fecha}: {e}")
+                return None
 
-        # Crear la nueva columna 'Fecha1'
-        df2['Fecha1'] = df2.apply(asignar_fecha1, axis=1)
 
+        # Configuración de fechas de referencia
+        fecha_1_enero = datetime(datetime.now().year, 1, 1)
+        fecha_hoy = datetime.now()
+
+        # Crear columnas nuevas aplicando la función genérica
+        df2['Fecha1'] = df2.apply(asignar_fecha, axis=1, args=('FECHA INGRESO', fecha_1_enero, True))
+        df2['Fecha2'] = df2.apply(asignar_fecha, axis=1, args=('FECHA RETIRO', fecha_hoy, False))
+        df2['Fecha1'] = pd.to_datetime(df2['Fecha1'], errors='coerce')
+        df2['Fecha2'] = pd.to_datetime(df2['Fecha2'], errors='coerce')
+
+        meses = [calendar.month_name[i] for i in range(1, 13)]
+        for mes in meses:
+            df2[mes] = 0
+
+        for index, row in df2.iterrows():
+            start_date = row['Fecha1']
+            end_date = row['Fecha2']
+            if pd.notna(start_date) and pd.notna(end_date) and start_date <= end_date:
+                # Iterar mes por mes dentro del rango
+                current_date = start_date
+                while current_date <= end_date:
+                    # Obtener el nombre del mes actual
+                    mes = calendar.month_name[current_date.month]
+                    # Incrementar el conteo en la columna correspondiente al mes
+                    df2.at[index, mes] += 1
+                    # Avanzar al siguiente día
+                    current_date += pd.Timedelta(days=1)
+
+        #Calcular FTE x mes
+        def calcular_porcentaje(df, meses):
+            for mes in meses:
+                # Obtener el número de días del mes correspondiente
+                mes_numero = list(calendar.month_name).index(mes)
+                anio_actual = datetime.now().year  # Puedes ajustar al año que corresponda
+                dias_del_mes = calendar.monthrange(anio_actual, mes_numero)[1]
+                   
+                # Calcular el porcentaje y actualizar los valores
+                df[mes] = df[mes] / dias_del_mes# Convertir a porcentaje como decimal
+            return df
+
+        # Llamar a la función
+        df2 = calcular_porcentaje(df2, meses)
 
 #endregion
-
-
-
-
 
         # Crear una columna concatenada de 'IDENTIFICACION' y 'REAL INICIO'
         # Eliminar duplicados basados en la columna concatenada
@@ -112,7 +150,7 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         # Eliminar filas con fechas inválidas
         df.dropna(subset=['REAL INICIO', 'REAL FINAL'], inplace=True)
         # Crear columnas para cada mes del año con los nombres reales
-        meses = [calendar.month_name[i] for i in range(1, 13)]
+        # meses = [calendar.month_name[i] for i in range(1, 13)]
         for mes in meses:
             df[mes] = 0
 
@@ -130,7 +168,7 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
                     df.at[index, mes] += 1
                     # Avanzar al siguiente día
                     current_date += pd.Timedelta(days=1)
-        # Eliminar la columna de concatenación después de procesar
+        
         
 
         #Calcula dias transcurridos 
