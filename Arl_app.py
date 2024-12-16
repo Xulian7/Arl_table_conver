@@ -38,8 +38,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         total_rows = len(df)
         initial_rows = total_rows
 
-
-
 #region data frame de nomina
 
         # Función genérica para asignar fechas según condiciones
@@ -58,7 +56,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
             except Exception as e:
                 print(f"Error al procesar la fila en {columna_fecha}: {e}")
                 return None
-
 
         # Configuración de fechas de referencia
         fecha_1_enero = datetime(datetime.now().year, 1, 1)
@@ -102,6 +99,30 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
 
         # Llamar a la función
         df2 = calcular_porcentaje(df2, meses)
+        # Calcular la suma de cada columna
+        suma_columnas = df2[meses].sum(axis=0)
+        # Agregar la suma como una nueva fila al DataFrame
+        df2.loc['Total'] = suma_columnas
+
+        # Crear el DataFrame
+        data = {
+            'Descrip': ['N° TOTAL DE TRABAJADORES', 'N° TOTAL HORAS HOMBRE TRABAJADAS'],
+            'Categoria': ['N.T.T.', 'H.H.T.'],
+            'January': ['', ''],
+            'February': ['', ''],
+            'March': ['', ''],
+            'April': ['', ''],
+            'May': ['', ''],
+            'June': ['', ''],
+            'July': ['', ''],
+            'August': ['', ''],
+            'September': ['', ''],
+            'October': ['', ''],
+            'November': ['', ''],
+            'December': ['', '']
+        }
+
+        df_nom = pd.DataFrame(data)
 
 #endregion
 
@@ -168,8 +189,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
                     df.at[index, mes] += 1
                     # Avanzar al siguiente día
                     current_date += pd.Timedelta(days=1)
-        
-        
 
         #Calcula dias transcurridos 
         df['DIAS_TRANSCURRIDOS'] = (df['REAL FINAL'] - df['REAL INICIO']).dt.days + 1
@@ -214,7 +233,6 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         df['REAL FINAL'] = pd.to_datetime(df['REAL FINAL'], errors='coerce').dt.strftime('%d/%m/%Y')
         df['Salario_base'] = df['SUELDO']/30
 
-
         df['CostBrut_AT'] = df['DIAS_TRANSCURRIDOS']*df['Salario_base']
         df['CostBrut_AC'] = df['DIAS_TRANSCURRIDOS']*df['Salario_base']*0.66
 
@@ -248,10 +266,7 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         # Reordenar el DataFrame y guardarlo en df_f
         df_f = df[column_order]
 
-        df_filtered = df_f.melt(id_vars=['SEDE', 'Categoria'], 
-                      value_vars=['January', 'February', 'March', 'April', 'May', 'June', 
-                                  'July', 'August', 'September', 'October', 'November', 'December'],
-                      var_name='Mes', value_name='Valor')
+        df_filtered = df_f.melt(id_vars=['SEDE', 'Categoria'], value_vars=['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], var_name='Mes', value_name='Valor')
 
         # Lista de categorías a eliminar
         categorias_a_eliminar = ['LIC. MAT', 'LIC. PAT']
@@ -358,12 +373,14 @@ def process_file(file_path, file_path2, output_folder, keywords, threshold):
         df_sumado = df_report.groupby('Categoria').sum(numeric_only=True).reset_index()
         df_report2 = pd.concat([df_report, df_sumado], ignore_index=True)
 
+        df_report2 = pd.concat([df_nom, df_report2], axis=0, ignore_index=True)
+
         with pd.ExcelWriter(output_path) as writer:
             df_f.to_excel(writer, sheet_name='Datos', index=False)
             df2.to_excel(writer, sheet_name='Horas', index=False)
-            df_report2.to_excel(writer, sheet_name='Report', index=False)
-
-     
+            df_nom.to_excel(writer, sheet_name='Report', index=False, startrow=0)
+            start_row_2 = len(df_nom) + 2
+            df_report2.to_excel(writer, sheet_name='Report', index=False, startrow=start_row_2)
 
         return True, stats
     except Exception as e:
@@ -611,3 +628,4 @@ label_json_display.grid(row=1, column=0, pady=5, sticky="nsew")
 
 # Iniciar el loop principal
 root.mainloop()
+#endregion
